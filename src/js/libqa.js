@@ -33,7 +33,7 @@ const FileUtil = imports.fileutil;
 const BOOT_UUID = "fdcaea3b-2775-45ef-b441-b46a4a18e8c4";
 const ROOT_UUID = "d230f7f0-99d3-4244-8bd9-665428054831";
 
-const DEFAULT_GF_PARTITION_OPTS = ['-m', '/dev/atomicos/root', '-m', '/dev/sda1:/boot'];
+const DEFAULT_GF_PARTITION_OPTS = ['-m', '/dev/atomicos/root', '-m', '/dev/sda2:/boot'];
 
 function linuxGetMemTotalMb() {
     let [success,contents] = GLib.file_get_contents('/proc/meminfo');
@@ -99,7 +99,7 @@ function newReadWriteMount(diskpath, cancellable) {
     gfmnt.mount(mntdir, cancellable);
     return [gfmnt, mntdir];
 }
-
+/*
 function _installSyslinux(gfHandle, cancellable) {
     let syslinuxPaths = ['/usr/share/syslinux/mbr.bin', '/usr/lib/syslinux/mbr.bin'].map(function (a) { return Gio.File.new_for_path(a); });
     let syslinuxPath = null;
@@ -117,7 +117,7 @@ function _installSyslinux(gfHandle, cancellable) {
 
     gfHandle.pwrite_device("/dev/sda", syslinuxData, 0);
 }
-
+*/
 function createDisk(diskpath, cancellable, params) {
     params = Params.parse(params, { sizeMb: 8 * 1024,
 				    bootsizeMb: 200,
@@ -140,19 +140,21 @@ function createDisk(diskpath, cancellable, params) {
     print(Format.vprintf("boot: %s root: %s", [bootsizeSectors, rootsizeSectors]));
     let rootOffset = bootOffset + bootsizeSectors;
     let endOffset = rootOffset + rootsizeSectors;
-
-    let bootPartitionOffset = 1;
-    let rootPartitionOffset = 2;
-    gfHandle.part_add("/dev/sda", "p", bootOffset, rootOffset - 1);
+    let prepPart = 20480;
+    let bootPartitionOffset = 2;
+    let rootPartitionOffset = 3;
+    gfHandle.part_add("/dev/sda", "p", bootOffset, prepPart-1);
+    gfHandle.part_add("/dev/sda", "p", prepPart, rootOffset - 1);
     gfHandle.part_add("/dev/sda", "p", rootOffset, endOffset - 1);
-    gfHandle.part_set_mbr_id("/dev/sda", 2, 0x8e);
+    gfHandle.part_set_mbr_id("/dev/sda", 1, 0x41); //41 prep partiton type for PPC64le
+    gfHandle.part_set_mbr_id("/dev/sda", 3, 0x8e); // LVM partition
     if (bootsizeSectors > 0) {
-	gfHandle.mkfs("ext4", "/dev/sda1", new Guestfs.Mkfs({ features: "^64bit" }));
-	gfHandle.set_e2uuid("/dev/sda1", BOOT_UUID);
+	gfHandle.mkfs("ext4", "/dev/sda2", new Guestfs.Mkfs({ features: "^64bit" }));
+	gfHandle.set_e2uuid("/dev/sda2", BOOT_UUID);
     }
     let lvsizeMb = params.sizeMb - params.bootsizeMb;
     let rootsizeMb = lvsizeMb;
-    let rootPV = "/dev/sda2";
+    let rootPV = "/dev/sda3";
     gfHandle.pvcreate(rootPV);
     gfHandle.vgcreate("atomicos", [rootPV]);
 
@@ -163,14 +165,14 @@ function createDisk(diskpath, cancellable, params) {
     gfHandle.xfs_admin("/dev/atomicos/root", new Guestfs.XfsAdmin({ "uuid": ROOT_UUID}));
     gfHandle.mount("/dev/atomicos/root", "/");
     gfHandle.mkdir_mode("/boot", 493);
-    gfHandle.mount("/dev/sda1", "/boot");
-    gfHandle.extlinux("/boot");
+    gfHandle.mount("/dev/sda2", "/boot");
+   // gfHandle.extlinux("/boot");
     // It's understandable that extlinux wants the loader to be
     // immutable...except that later breaks our ability to set SELinux
     // security contexts on it.
-    gfHandle.set_e2attrs("/boot/ldlinux.sys", "i", new Guestfs.SetE2attrs({ clear: Guestfs.Tristate.TRUE }));
+    //gfHandle.set_e2attrs("/boot/ldlinux.sys", "i", new Guestfs.SetE2attrs({ clear: Guestfs.Tristate.TRUE }));
     gfHandle.umount_all();
-    _installSyslinux(gfHandle, cancellable);
+    //_installSyslinux(gfHandle, cancellable);
     gfHandle.part_set_bootable("/dev/sda", 1, true);
     gfHandle.shutdown();
 }
